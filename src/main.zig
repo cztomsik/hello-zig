@@ -1,4 +1,5 @@
 const std = @import("std");
+const nvg = @import("nanovg");
 const c = @import("c.zig");
 const Document = @import("document.zig").Document;
 const Renderer = @import("renderer.zig").Renderer;
@@ -21,11 +22,8 @@ pub fn main() anyerror!void {
     _ = gladLoadGL();
 
     var renderer = try Renderer.init(allocator);
-    var doc = try Document.init(allocator);
-    const div = try doc.createElement("div");
-    const hello = try doc.createTextNode("Hello");
-    try doc.appendChild(div, hello);
-    try doc.appendChild(Document.ROOT, div);
+    var doc = try createSampleDoc();
+    defer doc.deinit();
 
     while (c.glfwWindowShouldClose(window) == 0) {
         c.glfwWaitEvents();
@@ -33,6 +31,26 @@ pub fn main() anyerror!void {
         renderer.render(&doc);
         c.glfwSwapBuffers(window);
     }
+}
+
+fn createSampleDoc() !Document {
+    var doc = try Document.init(allocator);
+
+    const body = try doc.createElement("body");
+    doc.set_element_style(body, .{ .background_color = nvg.rgba(255, 0, 0, 200), .opacity = 0.75 });
+    try doc.appendChild(Document.ROOT, body);
+
+    const div = try doc.createElement("div");
+    try doc.appendChild(body, div);
+    doc.set_element_style(div, .{ .background_color = nvg.rgba(0, 255, 0, 100), .border_radius = .{ 9, 9, 9, 9 } });
+
+    const hello = try doc.createTextNode("Hello");
+    try doc.appendChild(div, hello);
+
+    const world = try doc.createTextNode("World");
+    try doc.appendChild(div, world);
+
+    return doc;
 }
 
 extern fn gladLoadGL() callconv(.C) c_int;

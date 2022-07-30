@@ -2,21 +2,9 @@ const std = @import("std");
 const nvg = @import("nanovg");
 const Document = @import("document.zig").Document;
 const NodeId = @import("document.zig").NodeId;
-
-const Color = nvg.Color;
-
-const ContainerStyle = struct {
-    // transform: ?Matrix,
-    opacity: f32 = 1,
-    border_radii: ?[4]f32 = null,
-    // shadow: ?Shadow,
-    // outline: ?Outline,
-    // TODO: enum(u2) or packed struct { bool, bool } with same size
-    clip: bool = false,
-    bg_color: ?Color = null,
-    // TODO: images/gradients
-    // border: ?Border,
-};
+const Style = @import("style.zig").Style;
+const Color = @import("style.zig").Color;
+const TRANSPARENT = @import("style.zig").TRANSPARENT;
 
 const Shape = union(enum) { rect: Rect, rrect: RRect };
 
@@ -51,36 +39,59 @@ pub const Renderer = struct {
         self.vg.beginFrame(800, 600, 1.0);
         defer self.vg.endFrame();
 
+        var ctx = RenderContext{ .document = document, .vg = &self.vg, .avail_w = 600 };
+
         // white bg
-        self.fillShape(&.{ .rect = .{ .right = 800, .bottom = 600 } }, nvg.rgb(255, 255, 255));
+        ctx.fillShape(&.{ .rect = .{ .right = 800, .bottom = 600 } }, nvg.rgb(255, 255, 255));
 
-        self.renderNode(document, Document.ROOT, 0);
+        ctx.renderNode(Document.ROOT);
     }
+};
 
-    fn renderNode(self: *Self, document: *const Document, node: NodeId, index: usize) void {
-        std.debug.print("renderNode {} {}\n", .{ node, index });
+const RenderContext = struct {
+    document: *const Document,
+    vg: *nvg,
 
-        const rect = Rect{ .top = 60 * @intToFloat(f32, index), .right = 600, .bottom = 60 * @intToFloat(f32, index) + 40.0 };
+    // TODO: layout engine
+    y: f32 = 0,
+    avail_w: f32,
 
-        switch (document.node_type(node)) {
-            .document, .element => {
-                if (self.openContainer(rect, &.{ .bg_color = nvg.rgba(255, 0, 0, 127), .opacity = 0.75 })) {
-                    for (document.children(node)) |ch, i| {
-                        self.renderNode(document, ch, i);
-                    }
+    const Self = @This();
 
-                    self.closeContainer();
-                }
-            },
-            .text => self.drawText(rect, document.text(node)),
+    fn renderNode(self: *Self, node: NodeId) void {
+        std.debug.print("renderNode {}\n", .{node});
+
+        self.y += 20;
+
+        var rect = Rect{ .top = self.y, .left = (800 - self.avail_w) / 2, .right = 800 / 2 + (self.avail_w / 2), .bottom = self.y + 40.0 };
+
+        switch (self.document.node_type(node)) {
+            .element => self.drawContainer(rect, self.document.element_style(node), self.document.children(node)),
+            .text => self.drawText(rect, self.document.text(node)),
+            .document => self.drawContainer(rect, &.{}, self.document.children(node)),
         }
     }
 
-    fn openContainer(self: *Self, rect: Rect, style: *const ContainerStyle) bool {
+    fn drawContainer(self: *Self, rect: Rect, style: *const Style, children: []const NodeId) void {
+        // split open/close so we can skip invisibles AND we can also reduce stack usage per each recursion
+        // TODO: @call(.{ .modifier = .never_inline }, ...)
+        if (self.openContainer(rect, style)) {
+            for (children) |ch| {
+                self.renderNode(ch);
+            }
+
+            self.closeContainer();
+        }
+    }
+
+    fn openContainer(self: *Self, rect: Rect, style: *const Style) bool {
         // we don't have to save/restore() if we can skip the whole subtree
         if (style.opacity == 0) {
             return false;
         }
+
+        // TODO: layout
+        self.avail_w -= 40;
 
         // restored later
         self.vg.save();
@@ -90,8 +101,8 @@ pub const Renderer = struct {
             self.vg.globalAlpha(current * style.opacity);
         }
 
-        const shape = if (style.border_radii) |radii|
-            Shape{ .rrect = .{ .rect = rect, .radii = radii } }
+        const shape = if (!std.meta.eql(style.border_radius, .{ 0, 0, 0, 0 }))
+            Shape{ .rrect = .{ .rect = rect, .radii = style.border_radius } }
         else
             Shape{ .rect = rect };
 
@@ -111,8 +122,8 @@ pub const Renderer = struct {
         //     self.clipShape(&shape, ClipOp::Intersect, true /*style.transform.is_some()*/);
         // }
 
-        if (style.bg_color) |color| {
-            self.drawBgColor(&shape, color);
+        if (!std.meta.eql(style.background_color, TRANSPARENT)) {
+            self.drawBgColor(&shape, style.background_color);
         }
 
         // TODO: image(s)
@@ -125,6 +136,10 @@ pub const Renderer = struct {
 
     fn closeContainer(self: *Self) void {
         // TODO: optional border
+
+        // TODO: layout
+        self.avail_w += 40;
+        self.y += 60;
 
         self.vg.restore();
     }
