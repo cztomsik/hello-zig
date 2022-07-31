@@ -37,12 +37,22 @@ fn createSampleDoc() !Document {
     var doc = try Document.init(allocator);
 
     const body = try doc.createElement("body");
-    doc.set_element_style(body, .{ .background_color = nvg.rgba(255, 0, 0, 200), .opacity = 0.75 });
+    doc.set_element_style(body, .{
+        .padding_top = .{ .px = 20 },
+        .padding_right = .{ .px = 20 },
+        .padding_bottom = .{ .px = 20 },
+        .padding_left = .{ .px = 20 },
+        .background_color = nvg.rgba(255, 0, 0, 200),
+        .opacity = 0.75,
+    });
     try doc.appendChild(Document.ROOT, body);
 
     const div = try doc.createElement("div");
     try doc.appendChild(body, div);
-    doc.set_element_style(div, .{ .background_color = nvg.rgba(0, 255, 0, 100), .border_radius = .{ 9, 9, 9, 9 } });
+    doc.set_element_style(div, .{
+        .background_color = nvg.rgba(0, 255, 0, 100),
+        .border_radius = .{ 9, 9, 9, 9 },
+    });
 
     const hello = try doc.createTextNode("Hello");
     try doc.appendChild(div, hello);

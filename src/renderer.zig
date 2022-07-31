@@ -5,14 +5,17 @@ const NodeId = @import("document.zig").NodeId;
 const Style = @import("style.zig").Style;
 const Color = @import("style.zig").Color;
 const TRANSPARENT = @import("style.zig").TRANSPARENT;
+const LayoutNode = @import("layout.zig").LayoutNode;
+const calculate = @import("layout.zig").calculate;
 
 const Shape = union(enum) { rect: Rect, rrect: RRect };
 
-const Rect = struct { left: f32 = 0, top: f32 = 0, right: f32 = 0, bottom: f32 = 0 };
+const Rect = struct { x: f32 = 0, y: f32 = 0, w: f32 = 0, h: f32 = 0 };
 
 const RRect = struct { rect: Rect, radii: [4]f32 };
 
 pub const Renderer = struct {
+    allocator: std.mem.Allocator,
     vg: nvg,
 
     const Self = @This();
@@ -27,7 +30,7 @@ pub const Renderer = struct {
         const font = @embedFile("../nanovg-zig/examples/Roboto-Regular.ttf");
         _ = vg.createFontMem("sans", font);
 
-        return Self{ .vg = vg };
+        return Self{ .allocator = allocator, .vg = vg };
     }
 
     pub fn deinit(self: *Self) void {
@@ -39,10 +42,20 @@ pub const Renderer = struct {
         self.vg.beginFrame(800, 600, 1.0);
         defer self.vg.endFrame();
 
-        var ctx = RenderContext{ .document = document, .vg = &self.vg, .avail_w = 600 };
+        // layout-all
+        var layout_nodes = self.allocator.alloc(LayoutNode, document.nodes.items.len) catch @panic("oom");
+        defer self.allocator.free(layout_nodes);
+        for (layout_nodes) |*l, n| l.* = switch (document.node_type(n)) {
+            .element => .{ .style = document.element_style(n).*, .children = document.children(n) },
+            .text => .{ .style = .{ .display = .@"inline" }, .text = document.text(n) },
+            .document => .{ .style = .{}, .children = document.children(n) },
+        };
+        calculate(layout_nodes, Document.ROOT, .{ .width = 800, .height = 600 });
+
+        var ctx = RenderContext{ .document = document, .layout_nodes = layout_nodes, .vg = &self.vg };
 
         // white bg
-        ctx.fillShape(&.{ .rect = .{ .right = 800, .bottom = 600 } }, nvg.rgb(255, 255, 255));
+        ctx.fillShape(&.{ .rect = .{ .w = 800, .h = 600 } }, nvg.rgb(255, 255, 255));
 
         ctx.renderNode(Document.ROOT);
     }
@@ -50,20 +63,16 @@ pub const Renderer = struct {
 
 const RenderContext = struct {
     document: *const Document,
+    layout_nodes: []LayoutNode,
     vg: *nvg,
-
-    // TODO: layout engine
-    y: f32 = 0,
-    avail_w: f32,
 
     const Self = @This();
 
     fn renderNode(self: *Self, node: NodeId) void {
         std.debug.print("renderNode {}\n", .{node});
 
-        self.y += 20;
-
-        var rect = Rect{ .top = self.y, .left = (800 - self.avail_w) / 2, .right = 800 / 2 + (self.avail_w / 2), .bottom = self.y + 40.0 };
+        const l = &self.layout_nodes[node].layout;
+        var rect = Rect{ .x = l.pos.x, .y = l.pos.y, .w = l.size.width, .h = l.size.height };
 
         switch (self.document.node_type(node)) {
             .element => self.drawContainer(rect, self.document.element_style(node), self.document.children(node)),
@@ -76,6 +85,8 @@ const RenderContext = struct {
         // split open/close so we can skip invisibles AND we can also reduce stack usage per each recursion
         // TODO: @call(.{ .modifier = .never_inline }, ...)
         if (self.openContainer(rect, style)) {
+            self.vg.translate(rect.x, rect.y);
+
             for (children) |ch| {
                 self.renderNode(ch);
             }
@@ -90,11 +101,13 @@ const RenderContext = struct {
             return false;
         }
 
-        // TODO: layout
-        self.avail_w -= 40;
-
         // restored later
         self.vg.save();
+
+        if (rect.w == 0 or rect.h == 0) {
+            // skip but recur
+            return true;
+        }
 
         if (style.opacity != 1.0) {
             const current = self.vg.ctx.getState().alpha;
@@ -137,14 +150,11 @@ const RenderContext = struct {
     fn closeContainer(self: *Self) void {
         // TODO: optional border
 
-        // TODO: layout
-        self.avail_w += 40;
-        self.y += 60;
-
         self.vg.restore();
     }
 
     fn drawBgColor(self: *Self, shape: *const Shape, color: Color) void {
+        std.debug.print("shape {any}", .{shape});
         self.fillShape(shape, color);
     }
 
@@ -152,11 +162,11 @@ const RenderContext = struct {
         self.vg.beginPath();
 
         switch (shape.*) {
-            .rect => |rect| self.vg.rect(rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top),
+            .rect => |rect| self.vg.rect(rect.x, rect.y, rect.w, rect.h),
             .rrect => |rrect| {
                 const rect = &rrect.rect;
-                // TODO: if (radii[0] == radii[1] ...)
-                self.vg.roundedRect(rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top, rrect.radii[0]);
+                // TODO: if (radii[0] == radii[1] ...) else ...
+                self.vg.roundedRect(rect.x, rect.y, rect.w, rect.h, rrect.radii[0]);
             },
         }
 
@@ -168,6 +178,6 @@ const RenderContext = struct {
         self.vg.fontFace("sans");
         self.vg.fontSize(16);
         self.vg.fillColor(nvg.rgb(0, 0, 0));
-        _ = self.vg.text(rect.left, rect.top + 16, text);
+        _ = self.vg.text(rect.x, rect.y + 16, text);
     }
 };
